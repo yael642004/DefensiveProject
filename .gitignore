@@ -1,0 +1,6 @@
+.venv/
+venv/
+__pycache__/
+port.info
+priv.key
+received_files/
