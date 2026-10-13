@@ -148,8 +148,10 @@ def handle_file_upload(client_id_bytes: bytes, payload: bytes) -> tuple:
     saves the file locally, calculates its CRC checksum, and returns code 1603.
     """
     try:
-        # Content Size (4I), Orig File Size (4I), Packet Number (2H), Total Packets (2H), File Name (255s)
-        content_size, orig_file_size, packet_num, total_packets = struct.unpack("<IIHH", payload[:12])
+        # Content Size (4I), Orig File Size (4I), Packet Number (2H),
+        # Total Packets (2H), File Name (255s)
+        content_size, orig_file_size, packet_num, total_packets =\
+            struct.unpack("<IIHH", payload[:12])
         file_name_bytes = payload[12:12+255]
         file_name = file_name_bytes.rstrip(b'\x00').decode('utf-8', errors='ignore')
         encrypted_content = payload[12+255:]
@@ -187,7 +189,71 @@ def handle_file_upload(client_id_bytes: bytes, payload: bytes) -> tuple:
     except Exception as ex:
         print(f"Error handling file input: {ex}")
         return 1607, client_id_bytes
-    
+
+
+def handle_crc_valid(client_id_bytes: bytes, payload: bytes) -> tuple:
+    """
+    Processes a valid CRC confirmation (Code 900) from the client.
+    Returns response code 1604 to acknowledge.
+    """
+    try:
+        if len(payload) >= 255:
+            file_name = payload[:255].rstrip(b'\x00').decode('utf-8', errors='ignore')
+            print(f"CRC validation confirmation received from the client for the file: {file_name}")
+        else:
+            print("CRC validation confirmation received from the client.")
+        # Response Structure 1604 Payload: Client ID (16 bytes only)
+        response_payload = client_id_bytes
+        return 1604, response_payload
+    except Exception as ex:
+        print(f"Error handling CRC confirmation: {ex}")
+        return 1607, client_id_bytes
+
+
+def handle_crc_invalid(client_id_bytes: bytes, payload: bytes) -> tuple:
+    """
+    Processes an invalid CRC notification (Code 901) from the client.
+    The server deletes the corrupted file and prepares for a retransmission (Code 828).
+    """
+    try:
+        if len(payload) >= 255:
+            file_name = payload[:255].rstrip(b'\x00').decode('utf-8', errors='ignore')
+            print(f"Received a report of an incorrect CRC from a client for the file: {file_name}. Waiting for re-transmission.")
+            # Deleting the corrupted file from the disk
+            file_path = os.path.join("received_files", file_name)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"The corrupted file '{file_name}' was successfully deleted.")
+        else:
+            print("Report 901 received, but the payload is too short and does not contain the file name.")
+        # Since the client immediately sends another 828 request, no server response is required.
+        return None, None
+    except Exception as ex:
+        print(f"Error handling invalid CRC request: {ex}")
+        return None, None
+
+
+def handle_crc_forth(client_id_bytes: bytes, payload: bytes) -> tuple:
+    """
+    Processes a fatal CRC error (Code 902) after multiple failed retries.
+    The server deletes the corrupted file and acknowledges termination with Code 1604.
+    """
+    try:
+        if len(payload) >= 255:
+            file_name = payload[:255].rstrip(b'\x00').decode('utf-8', errors='ignore')
+            print(f"Received final report (902) regarding a CRC failure for the file: {file_name}. File transfer aborted.")
+
+            file_path = os.path.join("received_files", file_name)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"The corrupted file '{file_name}' has been permanently deleted.")
+        else:
+            print("Report 902 (transfer cancellation) received, but no valid filename for deletion was provided.")
+        return 1604, client_id_bytes
+    except Exception as ex:
+        print(f"Error while cancelling file transfer (902): {ex}")
+        return 1607, client_id_bytes
+
 
 def handle_client(client_socket: socket.socket, client_address: tuple):
     """
@@ -226,17 +292,26 @@ def handle_client(client_socket: socket.socket, client_address: tuple):
             elif code == 827:
                 response_code, response_payload = handle_reconnection(payload)
             elif code == 828:
-                esponse_code, response_payload =\
+                response_code, response_payload =\
                     handle_file_upload(client_id_bytes, payload)
+            elif code == 900:
+                response_code, response_payload =\
+                    handle_crc_valid(client_id_bytes, payload)
+            elif code == 901:
+                response_code, response_payload =\
+                    handle_crc_invalid(client_id_bytes, payload)
+            elif code == 902:
+                response_code, response_payload = handle_crc_forth(client_id_bytes, payload)
             else:
                 print(f"Warning: Unknown request code: {code}")
                 break
 
-            # Response Header:Version (1 byte) + Code (2 bytes)
-            # + Payload Size (4 bytes) = 7 bytes
-            res_header = struct.pack
-            ("<BHI", SERVER_VERSION, response_code, len(response_payload))
-            client_socket.sendall(res_header + response_payload)
+            if response_code is not None and response_payload is not None:
+                # Response Header:Version (1 byte) + Code (2 bytes)
+                # + Payload Size (4 bytes) = 7 bytes
+                res_header = struct.pack
+                ("<BHI", SERVER_VERSION, response_code, len(response_payload))
+                client_socket.sendall(res_header + response_payload)
 
     except Exception as e:
         print(f"Error handling client {client_address}: {e}")
