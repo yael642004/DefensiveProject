@@ -7,6 +7,7 @@ import struct
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP, AES
 from Crypto.Random import get_random_bytes
+from cksum_utils import memcrc
 
 PORT_FILE = "port.info"
 DEFAULT_PORT = 1369
@@ -15,53 +16,6 @@ HOST = '0.0.0.0'
 
 # In-memory storage for registered clients (RAM)
 registered_clients = {}
-
-# POSIX cksum CRC table
-CRC_TABLE = [
-    0x00000000, 0x04c11db7, 0x09823b6e, 0x0d4326d9, 0x130476dc, 0x17c56b6b,
-    0x1a864db2, 0x1e475005, 0x2608edb8, 0x22c9f00f, 0x2f8ad6d6, 0x2b4bcb61,
-    0x350c9b64, 0x31cd86d3, 0x3c8ea00a, 0x384fbdbd, 0x4c11db70, 0x48d0c6c7,
-    0x4593e01e, 0x4152fda9, 0x5f15adac, 0x5bd4b01b, 0x569796c2, 0x52568b75,
-    0x6a1936c8, 0x6ed82b7f, 0x639b0da6, 0x675a1011, 0x791d4014, 0x7ddc5da3,
-    0x709f7b7a, 0x745e66cd, 0x9823b6e0, 0x9ce2ab57, 0x91a18d8e, 0x95609039,
-    0x8b27c03c, 0x8fe6dd8b, 0x82a5fb52, 0x8664e6e5, 0xbe2b5b58, 0xbaea46ef,
-    0xb7a96036, 0xb3687d81, 0xad2f2d84, 0xa9ee3033, 0xa4ad16ea, 0xa06c0b5d,
-    0xd4326d90, 0xd0f37027, 0xdcb056fe, 0xd8714b49, 0xc6361b4c, 0xc2f706fb,
-    0xcf342022, 0xcbf53d95, 0xf3ba8028, 0xf77b9d9f, 0xfa38bb46, 0xfef9a6f1,
-    0xe0bef6f4, 0xe47feb43, 0xe93ccd9a, 0xede3d02d
-]
-
-
-def calculate_posix_cksum(data: bytes) -> int:
-    """
-    Calculates POSIX cksum (CRC32 + file length padding)
-    identical to Linux cksum.
-    """
-    crc = 0
-    for byte in data:
-        tbl_idx = ((crc >> 24) ^ byte) & 0xFF
-        crc = ((crc << 8) & 0xFFFFFFFF) ^ (
-            CRC_TABLE[tbl_idx % len(CRC_TABLE)]
-            if tbl_idx < len(CRC_TABLE) else 0
-        )
-
-    length = len(data)
-    length_bytes = bytearray()
-    temp_len = length
-    while temp_len > 0:
-        length_bytes.append(temp_len & 0xFF)
-        temp_len >>= 8
-    if not length_bytes:
-        length_bytes.append(0)
-
-    for byte in length_bytes:
-        tbl_idx = ((crc >> 24) ^ byte) & 0xFF
-        crc = ((crc << 8) & 0xFFFFFFFF) ^ (
-            CRC_TABLE[tbl_idx % len(CRC_TABLE)]
-            if tbl_idx < len(CRC_TABLE) else 0
-        )
-
-    return ~crc & 0xFFFFFFFF
 
 
 def read_port():
@@ -123,7 +77,7 @@ def handle_public_key(payload: bytes) -> tuple:
     Processes the public key exchange request (Code 826).
     Extracts the username and the RSA public key dynamically.
     """
-    MIN_PUBKEY_PAYLOAD = 256  
+    MIN_PUBKEY_PAYLOAD = 256
     if len(payload) < MIN_PUBKEY_PAYLOAD:
         print("Security error: Payload for public key exchange is too short.")
         return 1607, b"\x00" * 16
@@ -267,8 +221,9 @@ def handle_file_upload(client_id_bytes: bytes, payload: bytes) -> tuple:
             f.write(decrypted_content)
         print(f"The file {file_name} was successfully decoded and saved.")
 
-        # Calculate Linux-compatible POSIX cksum
-        cksum_value = calculate_posix_cksum(decrypted_content)
+        # Calculate Linux-compatible POSIX cksum using the modular
+        #  crc_utils implementation
+        cksum_value = memcrc(decrypted_content)
 
         response_payload = (
             client_id_bytes +

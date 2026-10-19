@@ -1,6 +1,28 @@
+# Sensitive keys and local configuration
+priv.key
+port.info
+
+# Server runtime data
+received_files/
+
+# Build outputs and compiled files
+/bin/
+/obj/
+/build/
+.vs/
+*.exe
+*.obj
+*.o
+*.lib
+*.pdb
+*.ilk
+
+# Python Virtual Environment & Cache
 .venv/
 venv/
 __pycache__/
-port.info
-priv.key
-received_files/
+*.py[cod]
+
+# OS specific files
+Thumbs.db
+.DS_Store
